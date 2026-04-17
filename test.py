@@ -1,19 +1,23 @@
 import requests
 
-BASE = "https://hng-stage1-profile-api.pxxl.click/api/profiles"
+BASE = "https://web-production-7f71.up.railway.app/api/profiles"
 
 print("=" * 50)
 print("TEST 1 — POST: create a new profile")
-r = requests.post(BASE, json={"name": "emma"})
-print("Status:", r.status_code)  # expect 201
-print("Raw response:", r.text) 
-print("Response:", r.json())
+r = requests.post(BASE, json={"name": "Lekan"})
+print("Status:", r.status_code)
+print("Raw response:", r.text)
+
+if r.status_code != 201:
+    print("POST failed, stopping test")
+    exit()
+
 profile_id = r.json()['data']['id']
 print()
 
 print("=" * 50)
 print("TEST 2 — POST: same name again (idempotency)")
-r = requests.post(BASE, json={"name": "emma"})
+r = requests.post(BASE, json={"name": "Lekan"})
 print("Status:", r.status_code)  # expect 200
 print("Has 'message' key:", "message" in r.json())  # expect True
 print("Message:", r.json().get("message"))  # expect "Profile already exists"

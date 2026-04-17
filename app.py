@@ -43,7 +43,7 @@ def create_profile():
         conn.close()
         return jsonify(
             {"status": "success",
-              "message": "Profile already exist",
+              "message": "Profile already exists",
               "data": dict(existing)
               }), 200
     
