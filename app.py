@@ -7,6 +7,7 @@ import uuid6
 import os
 
 app = Flask(__name__)
+create_profiles_table()
 app.json.sort_keys = False
 CORS(app)
 
@@ -182,8 +183,8 @@ def delete_profile(id):
 
 
 if __name__ == "__main__":
-    create_profiles_table()
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), debug=True)
+    
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 
 
 
