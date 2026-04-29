@@ -34,8 +34,14 @@ ACCESS_TOKEN_MINUTES = int(os.environ.get("ACCESS_TOKEN_MINUTES", 3))
 REFRESH_TOKEN_MINUTES = int(os.environ.get("REFRESH_TOKEN_MINUTES", 5)) 
 CORS(app,
      resources={r"/api/*": {"origins": [FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"]}},
-     supports_credentials=True,
-     allow_headers=["Content-Type", "Authorization", "X-Client-Type", "X-CSRF-Token"],
+     supports_credentials=True, # You already have this, which is good
+     allow_headers=[
+         "Content-Type", 
+         "Authorization", 
+         "X-Client-Type", 
+         "X-CSRF-Token",
+         "X-API-Version" # <-- ADD THIS HERE
+     ],
      methods=["GET", "POST", "DELETE", "OPTIONS"])
 
 limiter = Limiter(
@@ -225,9 +231,9 @@ def issue_tokens(user_id: str, role: str):
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.cookies.get("access_token")
+        token = request.cookies.get("access_token") # Web
         if not token:
-            auth_header = request.headers.get("Authorization", "")
+            auth_header = request.headers.get("Authorization", "") # CLI
             if auth_header.startswith("Bearer "):
                 token = auth_header.split(" ", 1)[1]
         if not token:
