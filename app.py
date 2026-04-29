@@ -521,7 +521,6 @@ def get_profile(profile_id):
         "data": profile_to_dict(row)
     }), 200
 
-
 @app.route("/api/v1/profiles", methods=["GET"])
 @require_auth
 @require_role("admin", "analyst")
@@ -562,16 +561,14 @@ def get_profiles():
     where, params = build_filter_query(filter_args)
     base_query = f"SELECT * FROM profiles WHERE {where}"
     rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
-    
-    rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
 
-    # Paste the patch HERE
+    # 1. Generate the flattened pagination data (with the self/next/prev links)
     pagination_data = get_pagination_fields(page, limit, total)
-    
+
     return jsonify({
         "status": "success",
-        **pagination_data, 
-        "data": [profile_to_dict(r) for r in rows]
+        **pagination_data, # 2. Unpack it directly into the response
+        "data":   [profile_to_dict(r) for r in rows],
     }), 200
 
 
@@ -597,17 +594,14 @@ def search_profiles():
     base_query = f"SELECT * FROM profiles WHERE {where}"
     rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
 
-    # ... inside get_profiles() and search_profiles() ...
-    
-    rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
-
-    # Paste the patch HERE
+    # 1. Generate the flattened pagination data
     pagination_data = get_pagination_fields(page, limit, total)
-    
+
     return jsonify({
-        "status": "success",
-        **pagination_data, 
-        "data": [profile_to_dict(r) for r in rows]
+        "status":          "success",
+        "parsed_filters":  filters,
+        **pagination_data, # 2. Unpack it
+        "data":            [profile_to_dict(r) for r in rows],
     }), 200
 
 
