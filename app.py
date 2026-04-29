@@ -360,9 +360,14 @@ def github_callback():
         "message": "Authenticated",
         "user": {"id": user_id, "username": username, "role": role},
     }))
-    resp.set_cookie("access_token",  access_token,  httponly=True, secure=True, samesite="Lax", max_age=ACCESS_TOKEN_MINUTES * 60)
-    resp.set_cookie("refresh_token", refresh_token, httponly=True, secure=True, samesite="Lax", max_age=REFRESH_TOKEN_DAYS * 86400)
-    resp.set_cookie("csrf_token",    csrf_token,    httponly=False, secure=True, samesite="Lax", max_age=ACCESS_TOKEN_MINUTES * 60)
+    
+    # Toggle secure=True for prod, False for local dev to avoid browser dropping them
+    is_prod = os.environ.get("FLASK_ENV") == "production"
+    
+    resp.set_cookie("access_token",  access_token,  httponly=True, secure=is_prod, samesite="Lax" if is_prod else "None", max_age=ACCESS_TOKEN_MINUTES * 60)
+    resp.set_cookie("refresh_token", refresh_token, httponly=True, secure=is_prod, samesite="Lax" if is_prod else "None", max_age=REFRESH_TOKEN_MINUTES * 60)
+    resp.set_cookie("csrf_token",    csrf_token,    httponly=False, secure=is_prod, samesite="Lax" if is_prod else "None", max_age=ACCESS_TOKEN_MINUTES * 60)
+    
     return resp, 200
 
 
