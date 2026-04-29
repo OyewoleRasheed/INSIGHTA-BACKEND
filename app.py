@@ -506,9 +506,6 @@ def create_profile():
 @app.route("/api/v1/profiles/<profile_id>", methods=["GET"])
 @require_auth
 @require_role("admin", "analyst")
-@app.route("/api/v1/profiles/<profile_id>", methods=["GET"])
-@require_auth
-@require_role("admin", "analyst")
 def get_profile(profile_id):
     conn = get_db_connection()
     row  = conn.execute("SELECT * FROM profiles WHERE id = ?", (profile_id,)).fetchone()
