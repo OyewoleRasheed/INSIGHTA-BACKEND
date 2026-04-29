@@ -363,10 +363,23 @@ def github_callback():
     
     # Toggle secure=True for prod, False for local dev to avoid browser dropping them
     is_prod = os.environ.get("FLASK_ENV") == "production"
-    
-    resp.set_cookie("access_token",  access_token,  httponly=True, secure=is_prod, samesite="Lax" if is_prod else "None", max_age=ACCESS_TOKEN_MINUTES * 60)
-    resp.set_cookie("refresh_token", refresh_token, httponly=True, secure=is_prod, samesite="Lax" if is_prod else "None", max_age=REFRESH_TOKEN_MINUTES * 60)
-    resp.set_cookie("csrf_token",    csrf_token,    httponly=False, secure=is_prod, samesite="Lax" if is_prod else "None", max_age=ACCESS_TOKEN_MINUTES * 60)
+    # In github_callback:
+    resp.set_cookie(
+    "access_token",  
+    access_token,  
+    httponly=True, 
+    secure=True,          # MUST BE True
+    samesite="None",      # MUST BE "None" 
+    max_age=ACCESS_TOKEN_MINUTES * 60
+)
+    resp.set_cookie(
+    "refresh_token", 
+    refresh_token, 
+    httponly=True, 
+    secure=True,          # MUST BE True
+    samesite="None",      # MUST BE "None"
+    max_age=REFRESH_TOKEN_MINUTES * 60
+)
     
     return resp, 200
 
@@ -423,9 +436,25 @@ def refresh_tokens_route():
 
     csrf_token = secrets.token_hex(32)
     resp = make_response(jsonify({"status": "success", "message": "Tokens refreshed"}))
-    resp.set_cookie("access_token",  access_token, httponly=True,  secure=True, samesite="Lax", max_age=ACCESS_TOKEN_MINUTES * 60)
-    resp.set_cookie("refresh_token", new_refresh,  httponly=True,  secure=True, samesite="Lax", max_age=REFRESH_TOKEN_MINUTES * 60)
-    resp.set_cookie("csrf_token",    csrf_token,   httponly=False, secure=True, samesite="Lax", max_age=ACCESS_TOKEN_MINUTES * 60)
+    # In github_callback:
+    resp.set_cookie(
+    "access_token",  
+    access_token,  
+    httponly=True, 
+    secure=True,          # MUST BE True
+    samesite="None",      # MUST BE "None" 
+    max_age=ACCESS_TOKEN_MINUTES * 60
+)
+    resp.set_cookie(
+    "refresh_token", 
+    refresh_token, 
+    httponly=True, 
+    secure=True,          # MUST BE True
+    samesite="None",      # MUST BE "None"
+    max_age=REFRESH_TOKEN_MINUTES * 60
+)
+
+
     return resp, 200
 
 
