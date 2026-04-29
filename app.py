@@ -424,7 +424,7 @@ def refresh_tokens_route():
     csrf_token = secrets.token_hex(32)
     resp = make_response(jsonify({"status": "success", "message": "Tokens refreshed"}))
     resp.set_cookie("access_token",  access_token, httponly=True,  secure=True, samesite="Lax", max_age=ACCESS_TOKEN_MINUTES * 60)
-    resp.set_cookie("refresh_token", new_refresh,  httponly=True,  secure=True, samesite="Lax", max_age=REFRESH_TOKEN_DAYS * 86400)
+    resp.set_cookie("refresh_token", new_refresh,  httponly=True,  secure=True, samesite="Lax", max_age=REFRESH_TOKEN_MINUTES * 60)
     resp.set_cookie("csrf_token",    csrf_token,   httponly=False, secure=True, samesite="Lax", max_age=ACCESS_TOKEN_MINUTES * 60)
     return resp, 200
 
