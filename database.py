@@ -1,25 +1,66 @@
 import sqlite3
+import os
+
+DB_PATH = os.environ.get("DB_PATH", "insighta.db")
 
 def get_db_connection():
-    conn = sqlite3.connect('profiles.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 def create_profiles_table():
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-         CREATE TABLE IF NOT EXISTS profiles (
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS profiles (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             gender TEXT,
             gender_probability REAL,
-            sample_size INTEGER,
             age INTEGER,
             age_group TEXT,
             country_id TEXT,
+            country_name TEXT,
             country_probability REAL,
-            created_at TEXT
-        )''')
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def create_users_table():
+    conn = get_db_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            github_id TEXT UNIQUE NOT NULL,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'analyst',
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+def create_refresh_tokens_table():
+    conn = get_db_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked INTEGER DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
     conn.commit()
     conn.close()

@@ -1,5 +1,9 @@
-flask
-flask-cors
-requests
-uuid6
-gunicorn
+flask==3.0.3
+flask-cors==4.0.1
+flask-limiter==3.7.0
+requests==2.32.3
+uuid6==2024.1.12
+pyjwt==2.8.0
+gunicorn==22.0.0
+pytest==7.2.0
+pytest-cov==4.0.0
