@@ -2,7 +2,7 @@
 
 This repository contains the backend service for Insighta Labs+, serving as the single source of truth for both a web portal and a globally installable Command Line Interface (CLI). 
 
-**Live API Base URL:** `[YOUR LIVE BACKEND URL HERE]`
+**Live API Base URL:** `[insighta91-backend-production]`
 
 ---
 
