@@ -30,9 +30,8 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-change-in-prod")
 GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "your_client_id")
 GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "your_client_secret")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-ACCESS_TOKEN_MINUTES = int(os.environ.get("ACCESS_TOKEN_MINUTES", 15))
-REFRESH_TOKEN_DAYS = int(os.environ.get("REFRESH_TOKEN_DAYS", 7))
-
+ACCESS_TOKEN_MINUTES = int(os.environ.get("ACCESS_TOKEN_MINUTES", 3))
+REFRESH_TOKEN_MINUTES = int(os.environ.get("REFRESH_TOKEN_MINUTES", 5)) 
 CORS(app,
      resources={r"/api/*": {"origins": [FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"]}},
      supports_credentials=True,
@@ -75,6 +74,12 @@ COUNTRY_NAMES = {
 @app.before_request
 def log_request_info():
     app.logger.info(f"{request.method} {request.path} ip={request.remote_addr} ua={request.user_agent.string[:60]}")
+def check_api_version():
+    # Only enforce on profile endpoints, and ignore CORS preflight OPTIONS requests
+    if request.path.startswith('/api/v1/profiles') and request.method != 'OPTIONS':
+        api_version = request.headers.get('X-API-Version')
+        if api_version != '1':
+            return jsonify({"status": "error", "message": "API version header required"}), 400
 
 @app.after_request
 def set_security_headers(response):
@@ -164,12 +169,28 @@ def parse_float_param(val, name):
     except (ValueError, TypeError):
         return None, ({"status": "error", "message": f"'{name}' must be a number"}, 422)
 
-def pagination_meta(page, limit, total):
+from urllib.parse import urlencode
+
+def get_pagination_fields(page, limit, total):
+    total_pages = max(1, (total + limit - 1) // limit)
+    
+    def make_url(p):
+        if p < 1 or p > total_pages: return None
+        args = request.args.copy()
+        args['page'] = p
+        args['limit'] = limit
+        return f"{request.path}?{urlencode(args)}"
+
     return {
         "page": page,
         "limit": limit,
-        "total_records": total,
-        "total_pages": max(1, (total + limit - 1) // limit),
+        "total": total, # Changed from total_records to total
+        "total_pages": total_pages,
+        "links": {
+            "self": make_url(page),
+            "next": make_url(page + 1) if page < total_pages else None,
+            "prev": make_url(page - 1) if page > 1 else None
+        }
     }
 
 def issue_tokens(user_id: str, role: str):
@@ -184,15 +205,15 @@ def issue_tokens(user_id: str, role: str):
     refresh_jti = secrets.token_hex(32)
     refresh_token = jwt.encode({
         "user_id": user_id, "jti": refresh_jti,
-        "exp": now + timedelta(days=REFRESH_TOKEN_DAYS),
+        "exp": now + timedelta(minutes=REFRESH_TOKEN_MINUTES), # Updated to minutes
         "iat": now,
     }, JWT_SECRET, algorithm="HS256")
-
-    # Persist refresh token
     conn = get_db_connection()
+
+    # Persist refresh token (Update the expires_at here too)
     conn.execute(
         "INSERT INTO refresh_tokens (token, user_id, expires_at, revoked) VALUES (?,?,?,0)",
-        (refresh_jti, user_id, (now + timedelta(days=REFRESH_TOKEN_DAYS)).isoformat())
+        (refresh_jti, user_id, (now + timedelta(minutes=REFRESH_TOKEN_MINUTES)).isoformat())
     )
     conn.commit()
     conn.close()
@@ -213,6 +234,15 @@ def require_auth(f):
             return jsonify({"status": "error", "message": "Unauthorized"}), 401
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            
+            # Check if user is active
+            conn = get_db_connection()
+            user_row = conn.execute("SELECT is_active FROM users WHERE id = ?", (payload["user_id"],)).fetchone()
+            conn.close()
+            
+            if not user_row or not user_row["is_active"]:
+                return jsonify({"status": "error", "message": "Account is disabled"}), 403
+                
             g.user = payload
         except jwt.ExpiredSignatureError:
             return jsonify({"status": "error", "message": "Token expired"}), 401
@@ -482,7 +512,13 @@ def get_profile(profile_id):
     conn.close()
     if not row:
         return jsonify({"status": "error", "message": "Profile not found"}), 404
-    return jsonify({"status": "success", "data": profile_to_dict(row)}), 200
+    pagination_data = get_pagination_fields(page, limit, total)
+    
+    return jsonify({
+        "status": "success",
+        **pagination_data, # This flattens the pagination fields into the root level
+        "data": [profile_to_dict(r) for r in rows]
+    }), 200
 
 
 @app.route("/api/v1/profiles", methods=["GET"])
@@ -526,10 +562,12 @@ def get_profiles():
     base_query = f"SELECT * FROM profiles WHERE {where}"
     rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
 
+    pagination_data = get_pagination_fields(page, limit, total)
+    
     return jsonify({
         "status": "success",
-        "meta":   pagination_meta(page, limit, total),
-        "data":   [profile_to_dict(r) for r in rows],
+        **pagination_data, # This flattens the pagination fields into the root level
+        "data": [profile_to_dict(r) for r in rows]
     }), 200
 
 
@@ -555,11 +593,12 @@ def search_profiles():
     base_query = f"SELECT * FROM profiles WHERE {where}"
     rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
 
+    pagination_data = get_pagination_fields(page, limit, total)
+    
     return jsonify({
-        "status":          "success",
-        "parsed_filters":  filters,
-        "meta":            pagination_meta(page, limit, total),
-        "data":            [profile_to_dict(r) for r in rows],
+        "status": "success",
+        **pagination_data, # This flattens the pagination fields into the root level
+        "data": [profile_to_dict(r) for r in rows]
     }), 200
 
 

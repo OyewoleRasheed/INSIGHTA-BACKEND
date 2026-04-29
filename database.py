@@ -31,24 +31,19 @@ def create_profiles_table():
 
 def create_users_table():
     conn = get_db_connection()
-    conn.execute("""
+    conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
-            github_id TEXT UNIQUE NOT NULL,
-            username TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'analyst',
-            created_at TEXT NOT NULL
+            github_id TEXT UNIQUE,
+            username TEXT,
+            email TEXT,
+            avatar_url TEXT,
+            role TEXT DEFAULT 'analyst',
+            is_active BOOLEAN DEFAULT 1,
+            last_login_at TEXT,
+            created_at TEXT
         )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS refresh_tokens (
-            token TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            revoked INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )
-    """)
+    ''')
     conn.commit()
     conn.close()
 def create_refresh_tokens_table():
