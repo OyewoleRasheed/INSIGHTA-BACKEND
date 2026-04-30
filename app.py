@@ -48,7 +48,6 @@ CORS(app,
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["200 per day", "50 per hour"],
     storage_uri="memory://"
 )
 
@@ -315,7 +314,6 @@ def github_login():
 
 
 @app.route("/auth/github/callback", methods=["GET", "POST"])
-@limiter.limit("10 per minute")
 def github_callback():
     client_type = request.headers.get("X-Client-Type", "web")
     
@@ -418,7 +416,6 @@ def github_callback():
 
 
 @app.route("/auth/refresh", methods=["POST"])
-@limiter.limit("20 per minute")
 def refresh_tokens_route():
     client_type = request.headers.get("X-Client-Type", "web")
 
@@ -519,7 +516,6 @@ def me():
 @require_version("1")
 @require_role("admin")
 @csrf_protect
-@limiter.limit("30 per minute")
 def create_profile():
     body = request.get_json(silent=True) or {}
     name = (body.get("name") or "").strip()

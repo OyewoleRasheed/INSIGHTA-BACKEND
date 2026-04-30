@@ -1,9 +1,0 @@
-name: Backend CI
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Dummy Test
-        run: echo "CI/CD setup complete"
