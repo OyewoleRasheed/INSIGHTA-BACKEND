@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from urllib.parse import urlencode
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from flask import Flask, jsonify, request, g, Response, make_response, redirect
 from flask_cors import CORS
@@ -24,9 +25,13 @@ from nlp_parser import parse_query
 # App Initialization & Config
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 app.json.sort_keys = False
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-change-in-prod")
+GITHUB_AUTH_BASE = os.environ.get("GITHUB_AUTH_BASE", "https://github.com/login/oauth/authorize")
+GITHUB_TOKEN_URL = os.environ.get("GITHUB_TOKEN_URL", "https://github.com/login/oauth/access_token")
+GITHUB_USER_URL  = os.environ.get("GITHUB_USER_URL", "https://api.github.com/user")
 GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "your_client_id")
 GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "your_client_secret")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
@@ -299,7 +304,8 @@ def github_login():
         "code_challenge_method": "S256",
         "scope": "read:user user:email",
     }
-    url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+    
+    url = f"{GITHUB_AUTH_BASE}?{urlencode(params)}"
     
     # Redirect the browser to GitHub
     resp = make_response(redirect(url))
@@ -346,7 +352,7 @@ def github_callback():
         token_payload["code_verifier"] = code_verifier
 
     token_resp = requests.post(
-        "https://github.com/login/oauth/access_token",
+        GITHUB_TOKEN_URL,
         headers={"Accept": "application/json"},
         data=token_payload,
         timeout=10,
@@ -358,7 +364,7 @@ def github_callback():
         return jsonify({"status": "error", "message": error_msg}), 401
 
     user_resp = requests.get(
-        "https://api.github.com/user",
+        GITHUB_USER_URL,
         headers={"Authorization": f"Bearer {gh_token}"},
         timeout=10,
     ).json()
@@ -372,8 +378,14 @@ def github_callback():
     user = cursor.fetchone()
 
     if not user:
+        # Check how many users exist
+        cursor.execute("SELECT COUNT(*) as cnt FROM users")
+        user_count = cursor.fetchone()["cnt"]
+        
         user_id = str(uuid6.uuid7())
-        role    = "analyst"
+        # Make the very first user an admin, everyone else an analyst
+        role    = "admin" if user_count == 0 else "analyst" 
+        
         cursor.execute(
             "INSERT INTO users (id, github_id, username, role, created_at) VALUES (?,?,?,?,?)",
             (user_id, github_id, username, role, datetime.now(timezone.utc).isoformat()),
