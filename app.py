@@ -285,7 +285,7 @@ def require_version(version="1"):
 # ---------------------------------------------------------------------------
 
 @app.route("/auth/github", methods=["GET"])
-@limiter.limit("10 per minute")
+@limiter.limit("10 per 5 seconds")
 def github_login():
     """Initiates the GitHub OAuth PKCE flow."""
     state = secrets.token_urlsafe(16)
