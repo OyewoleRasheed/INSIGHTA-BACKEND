@@ -7,16 +7,16 @@ from io import StringIO
 import logging
 from datetime import datetime, timezone, timedelta
 from functools import wraps
+from urllib.parse import urlencode
 
-from flask import Flask, jsonify, request, g, Response, make_response
+from flask import Flask, jsonify, request, g, Response, make_response, redirect
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import requests
 import uuid6
 import jwt
-from database import get_db_connection, create_profiles_table, create_users_table,         create_refresh_tokens_table
-
+from database import get_db_connection, create_profiles_table, create_users_table, create_refresh_tokens_table
 
 from nlp_parser import parse_query
 
@@ -32,16 +32,12 @@ GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "your_client_secre
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 ACCESS_TOKEN_MINUTES = int(os.environ.get("ACCESS_TOKEN_MINUTES", 3))
 REFRESH_TOKEN_MINUTES = int(os.environ.get("REFRESH_TOKEN_MINUTES", 5)) 
+
+# Allowed CORS origins
 CORS(app,
-     resources={r"/api/*": {"origins": [FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"]}},
-     supports_credentials=True, # You already have this, which is good
-     allow_headers=[
-         "Content-Type", 
-         "Authorization", 
-         "X-Client-Type", 
-         "X-CSRF-Token",
-         "X-API-Version" # <-- ADD THIS HERE
-     ],
+     resources={r"/*": {"origins": [FRONTEND_URL, "http://localhost:3000", "http://localhost:5173"]}},
+     supports_credentials=True, 
+     allow_headers=["Content-Type", "Authorization", "X-Client-Type", "X-CSRF-Token", "X-API-Version"],
      methods=["GET", "POST", "DELETE", "OPTIONS"])
 
 limiter = Limiter(
@@ -80,12 +76,6 @@ COUNTRY_NAMES = {
 @app.before_request
 def log_request_info():
     app.logger.info(f"{request.method} {request.path} ip={request.remote_addr} ua={request.user_agent.string[:60]}")
-def check_api_version():
-    # Only enforce on profile endpoints, and ignore CORS preflight OPTIONS requests
-    if request.path.startswith('/api/v1/profiles') and request.method != 'OPTIONS':
-        api_version = request.headers.get('X-API-Version')
-        if api_version != '1':
-            return jsonify({"status": "error", "message": "API version header required"}), 400
 
 @app.after_request
 def set_security_headers(response):
@@ -175,8 +165,6 @@ def parse_float_param(val, name):
     except (ValueError, TypeError):
         return None, ({"status": "error", "message": f"'{name}' must be a number"}, 422)
 
-from urllib.parse import urlencode
-
 def get_pagination_fields(page, limit, total):
     total_pages = max(1, (total + limit - 1) // limit)
     
@@ -190,7 +178,7 @@ def get_pagination_fields(page, limit, total):
     return {
         "page": page,
         "limit": limit,
-        "total": total, # Changed from total_records to total
+        "total": total,
         "total_pages": total_pages,
         "links": {
             "self": make_url(page),
@@ -200,7 +188,6 @@ def get_pagination_fields(page, limit, total):
     }
 
 def issue_tokens(user_id: str, role: str):
-    """Issue a short-lived access token + long-lived refresh token."""
     now = datetime.now(timezone.utc)
     access_token = jwt.encode({
         "user_id": user_id, "role": role,
@@ -211,12 +198,11 @@ def issue_tokens(user_id: str, role: str):
     refresh_jti = secrets.token_hex(32)
     refresh_token = jwt.encode({
         "user_id": user_id, "jti": refresh_jti,
-        "exp": now + timedelta(minutes=REFRESH_TOKEN_MINUTES), # Updated to minutes
+        "exp": now + timedelta(minutes=REFRESH_TOKEN_MINUTES),
         "iat": now,
     }, JWT_SECRET, algorithm="HS256")
+    
     conn = get_db_connection()
-
-    # Persist refresh token (Update the expires_at here too)
     conn.execute(
         "INSERT INTO refresh_tokens (token, user_id, expires_at, revoked) VALUES (?,?,?,0)",
         (refresh_jti, user_id, (now + timedelta(minutes=REFRESH_TOKEN_MINUTES)).isoformat())
@@ -241,7 +227,6 @@ def require_auth(f):
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
             
-            # Check if user is active
             conn = get_db_connection()
             user_row = conn.execute("SELECT is_active FROM users WHERE id = ?", (payload["user_id"],)).fetchone()
             conn.close()
@@ -269,13 +254,11 @@ def require_role(*roles):
     return decorator
 
 def csrf_protect(f):
-    """Validate CSRF token for mutating web requests (non-CLI)."""
     @wraps(f)
     def decorated(*args, **kwargs):
         client_type = request.headers.get("X-Client-Type", "web")
         if client_type == "cli":
             return f(*args, **kwargs)
-        # Web clients must send X-CSRF-Token matching the csrf_token cookie
         csrf_cookie  = request.cookies.get("csrf_token", "")
         csrf_header  = request.headers.get("X-CSRF-Token", "")
         if not csrf_cookie or not secrets.compare_digest(csrf_cookie, csrf_header):
@@ -283,23 +266,81 @@ def csrf_protect(f):
         return f(*args, **kwargs)
     return decorated
 
+def require_version(version="1"):
+    def decorator(f):
+        @wraps(f)
+        def inner(*args, **kwargs):
+            if request.headers.get("X-API-Version") != version:
+                return jsonify({"status": "error", "message": f"API version {version} required via X-API-Version header"}), 400
+            return f(*args, **kwargs)
+        return inner
+    return decorator
+
 # ---------------------------------------------------------------------------
-# Auth Routes
+# Auth Routes (UNVERSIONED, standard paths)
 # ---------------------------------------------------------------------------
-@app.route("/api/v1/auth/github/callback", methods=["POST"])
+
+@app.route("/auth/github", methods=["GET"])
+@limiter.limit("10 per minute")
+def github_login():
+    """Initiates the GitHub OAuth PKCE flow."""
+    state = secrets.token_urlsafe(16)
+    code_verifier = secrets.token_urlsafe(32)
+    
+    # Generate PKCE code challenge
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode('ascii')).digest()
+    ).decode('ascii').rstrip('=')
+
+    params = {
+        "client_id": GITHUB_CLIENT_ID,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "scope": "read:user user:email",
+    }
+    url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+    
+    # Redirect the browser to GitHub
+    resp = make_response(redirect(url))
+    resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="None", max_age=600)
+    resp.set_cookie("code_verifier", code_verifier, httponly=True, secure=True, samesite="None", max_age=600)
+    return resp
+
+
+@app.route("/auth/github/callback", methods=["GET", "POST"])
 @limiter.limit("10 per minute")
 def github_callback():
-    data = request.get_json(silent=True) or {}
-    code           = data.get("code")
-    code_verifier  = data.get("code_verifier")  # PKCE
+    client_type = request.headers.get("X-Client-Type", "web")
+    
+    # Handle both POST (CLI API call) and GET (Browser Redirect)
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        code = data.get("code")
+        state = data.get("state")
+        code_verifier = data.get("code_verifier")
+    else:
+        code = request.args.get("code")
+        state = request.args.get("state")
+        # Extract cookies set in /auth/github
+        code_verifier = request.cookies.get("code_verifier")
+        expected_state = request.cookies.get("oauth_state")
+        
+        # Strict state validation for browser flow
+        if expected_state and state != expected_state:
+            return jsonify({"status": "error", "message": "Invalid state"}), 400
 
+    # 1. Strict Requirement: Reject missing code/state
     if not code:
         return jsonify({"status": "error", "message": "Missing code"}), 400
+    if not state:
+        return jsonify({"status": "error", "message": "Missing state"}), 400
 
+    # 2. Token Exchange
     token_payload = {
-        "client_id":     GITHUB_CLIENT_ID,
+        "client_id": GITHUB_CLIENT_ID,
         "client_secret": GITHUB_CLIENT_SECRET,
-        "code":          code,
+        "code": code,
     }
     if code_verifier:
         token_payload["code_verifier"] = code_verifier
@@ -313,7 +354,8 @@ def github_callback():
 
     gh_token = token_resp.get("access_token")
     if not gh_token:
-        return jsonify({"status": "error", "message": "GitHub authentication failed"}), 401
+        error_msg = token_resp.get("error_description", "GitHub authentication failed")
+        return jsonify({"status": "error", "message": error_msg}), 401
 
     user_resp = requests.get(
         "https://api.github.com/user",
@@ -343,9 +385,8 @@ def github_callback():
     conn.close()
 
     access_token, refresh_token = issue_tokens(user_id, role)
-    client_type = request.headers.get("X-Client-Type", "web")
 
-    if client_type == "cli":
+    if client_type == "cli" or request.method == "POST":
         return jsonify({
             "status": "success",
             "access_token": access_token,
@@ -353,41 +394,20 @@ def github_callback():
             "user": {"id": user_id, "username": username, "role": role},
         }), 200
 
-    # Web: set HTTP-only cookies + a readable CSRF token
+    # Web Flow: Redirect back to frontend dashboard with HTTP-only cookies
     csrf_token = secrets.token_hex(32)
-    resp = make_response(jsonify({
-        "status": "success",
-        "message": "Authenticated",
-        "user": {"id": user_id, "username": username, "role": role},
-    }))
+    resp = make_response(redirect(f"{FRONTEND_URL}/dashboard")) 
     
-    # Toggle secure=True for prod, False for local dev to avoid browser dropping them
-    is_prod = os.environ.get("FLASK_ENV") == "production"
-    # In github_callback:
-    resp.set_cookie(
-    "access_token",  
-    access_token,  
-    httponly=True, 
-    secure=True,          # MUST BE True
-    samesite="None",      # MUST BE "None" 
-    max_age=ACCESS_TOKEN_MINUTES * 60
-)
-    resp.set_cookie(
-    "refresh_token", 
-    refresh_token, 
-    httponly=True, 
-    secure=True,          # MUST BE True
-    samesite="None",      # MUST BE "None"
-    max_age=REFRESH_TOKEN_MINUTES * 60
-)
+    resp.set_cookie("access_token", access_token, httponly=True, secure=True, samesite="None", max_age=ACCESS_TOKEN_MINUTES * 60)
+    resp.set_cookie("refresh_token", refresh_token, httponly=True, secure=True, samesite="None", max_age=REFRESH_TOKEN_MINUTES * 60)
+    resp.set_cookie("csrf_token", csrf_token, httponly=False, secure=True, samesite="None", max_age=ACCESS_TOKEN_MINUTES * 60)
     
-    return resp, 200
+    return resp
 
 
-@app.route("/api/v1/auth/refresh", methods=["POST"])
+@app.route("/auth/refresh", methods=["POST"])
 @limiter.limit("20 per minute")
 def refresh_tokens_route():
-    """Exchange a valid refresh token for new access + refresh tokens."""
     client_type = request.headers.get("X-Client-Type", "web")
 
     if client_type == "cli":
@@ -418,7 +438,6 @@ def refresh_tokens_route():
         conn.close()
         return jsonify({"status": "error", "message": "Refresh token revoked"}), 401
 
-    # Rotate: revoke old, issue new
     conn.execute("UPDATE refresh_tokens SET revoked = 1 WHERE token = ?", (jti,))
     conn.commit()
 
@@ -434,31 +453,13 @@ def refresh_tokens_route():
     if client_type == "cli":
         return jsonify({"access_token": access_token, "refresh_token": new_refresh}), 200
 
-    csrf_token = secrets.token_hex(32)
     resp = make_response(jsonify({"status": "success", "message": "Tokens refreshed"}))
-    # In github_callback:
-    resp.set_cookie(
-    "access_token",  
-    access_token,  
-    httponly=True, 
-    secure=True,          # MUST BE True
-    samesite="None",      # MUST BE "None" 
-    max_age=ACCESS_TOKEN_MINUTES * 60
-)
-    resp.set_cookie(
-    "refresh_token", 
-    refresh_token, 
-    httponly=True, 
-    secure=True,          # MUST BE True
-    samesite="None",      # MUST BE "None"
-    max_age=REFRESH_TOKEN_MINUTES * 60
-)
-
-
+    resp.set_cookie("access_token", access_token, httponly=True, secure=True, samesite="None", max_age=ACCESS_TOKEN_MINUTES * 60)
+    resp.set_cookie("refresh_token", new_refresh, httponly=True, secure=True, samesite="None", max_age=REFRESH_TOKEN_MINUTES * 60)
     return resp, 200
 
 
-@app.route("/api/v1/auth/logout", methods=["POST"])
+@app.route("/auth/logout", methods=["POST"])
 @require_auth
 def logout():
     client_type = request.headers.get("X-Client-Type", "web")
@@ -485,7 +486,7 @@ def logout():
     return jsonify({"status": "success", "message": "Logged out"}), 200
 
 
-@app.route("/api/v1/auth/me", methods=["GET"])
+@app.route("/api/users/me", methods=["GET"])
 @require_auth
 def me():
     user_id = g.user.get("user_id")
@@ -496,12 +497,14 @@ def me():
         return jsonify({"status": "error", "message": "User not found"}), 404
     return jsonify({"status": "success", "data": dict(row)}), 200
 
+
 # ---------------------------------------------------------------------------
-# Profile Routes
+# Profile Routes (With Header Versioning)
 # ---------------------------------------------------------------------------
 
-@app.route("/api/v1/profiles", methods=["POST"])
+@app.route("/api/profiles", methods=["POST"])
 @require_auth
+@require_version("1")
 @require_role("admin")
 @csrf_protect
 @limiter.limit("30 per minute")
@@ -511,8 +514,6 @@ def create_profile():
     if not name:
         return jsonify({"status": "error", "message": "Name is required"}), 400
 
-    # Call external Agify / Genderize / Nationalize APIs if desired,
-    # or accept the payload directly.
     gender              = body.get("gender", "unknown")
     gender_probability  = float(body.get("gender_probability", 0.0))
     age                 = int(body.get("age", 0))
@@ -543,8 +544,9 @@ def create_profile():
     }}), 201
 
 
-@app.route("/api/v1/profiles/<profile_id>", methods=["GET"])
+@app.route("/api/profiles/<profile_id>", methods=["GET"])
 @require_auth
+@require_version("1")
 @require_role("admin", "analyst")
 def get_profile(profile_id):
     conn = get_db_connection()
@@ -558,8 +560,9 @@ def get_profile(profile_id):
         "data": profile_to_dict(row)
     }), 200
 
-@app.route("/api/v1/profiles", methods=["GET"])
+@app.route("/api/profiles", methods=["GET"])
 @require_auth
+@require_version("1")
 @require_role("admin", "analyst")
 def get_profiles():
     args = request.args
@@ -599,18 +602,18 @@ def get_profiles():
     base_query = f"SELECT * FROM profiles WHERE {where}"
     rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
 
-    # 1. Generate the flattened pagination data (with the self/next/prev links)
     pagination_data = get_pagination_fields(page, limit, total)
 
     return jsonify({
         "status": "success",
-        **pagination_data, # 2. Unpack it directly into the response
+        **pagination_data, 
         "data":   [profile_to_dict(r) for r in rows],
     }), 200
 
 
-@app.route("/api/v1/profiles/search", methods=["GET"])
+@app.route("/api/profiles/search", methods=["GET"])
 @require_auth
+@require_version("1")
 @require_role("admin", "analyst")
 def search_profiles():
     query = request.args.get("q", "").strip()
@@ -631,19 +634,19 @@ def search_profiles():
     base_query = f"SELECT * FROM profiles WHERE {where}"
     rows, total = paginate_query(base_query, params, sort_by, order, page, limit)
 
-    # 1. Generate the flattened pagination data
     pagination_data = get_pagination_fields(page, limit, total)
 
     return jsonify({
         "status":          "success",
         "parsed_filters":  filters,
-        **pagination_data, # 2. Unpack it
+        **pagination_data, 
         "data":            [profile_to_dict(r) for r in rows],
     }), 200
 
 
-@app.route("/api/v1/profiles/export", methods=["GET"])
+@app.route("/api/profiles/export", methods=["GET"])
 @require_auth
+@require_version("1")
 @require_role("admin", "analyst")
 def export_profiles():
     args = request.args
@@ -681,8 +684,9 @@ def export_profiles():
     )
 
 
-@app.route("/api/v1/profiles/<profile_id>", methods=["DELETE"])
+@app.route("/api/profiles/<profile_id>", methods=["DELETE"])
 @require_auth
+@require_version("1")
 @require_role("admin")
 @csrf_protect
 def delete_profile(profile_id):
@@ -697,7 +701,7 @@ def delete_profile(profile_id):
 # ---------------------------------------------------------------------------
 # Admin: role management
 # ---------------------------------------------------------------------------
-@app.route("/api/v1/admin/users", methods=["GET"])
+@app.route("/api/admin/users", methods=["GET"])
 @require_auth
 @require_role("admin")
 def list_users():
@@ -707,7 +711,7 @@ def list_users():
     return jsonify({"status": "success", "data": [dict(r) for r in rows]}), 200
 
 
-@app.route("/api/v1/admin/users/<user_id>/role", methods=["POST"])
+@app.route("/api/admin/users/<user_id>/role", methods=["POST"])
 @require_auth
 @require_role("admin")
 @csrf_protect
@@ -727,7 +731,7 @@ def set_user_role(user_id):
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
-@app.route("/api/v1/health", methods=["GET"])
+@app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": "1.0.0"}), 200
 
